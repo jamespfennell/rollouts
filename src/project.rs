@@ -109,7 +109,7 @@ impl<'a> Manager<'a> {
             let loop_duration = chrono::Utc::now() - start;
             match self.poll_interval.checked_sub(&loop_duration) {
                 Some(remaining) => {
-                    if rx.recv_timeout(remaining.to_std().unwrap()).is_ok() {
+                    if rx.recv_timeout(remaining.to_std().unwrap_or_default()).is_ok() {
                         eprintln!(
                             "[project_manager] sleep interrupted because of shut down signal"
                         );
@@ -161,11 +161,14 @@ impl Project {
             return Ok(());
         }
         let old_workflow_run = &self.last_workflow_run;
-        let new_workflow_run = github_client.get_latest_successful_workflow_run(
+        let new_workflow_run_or = github_client.get_latest_successful_workflow_run(
             &self.config.repo,
             &self.config.branch,
             &self.config.auth_token,
         )?;
+        let Some(new_workflow_run) = new_workflow_run_or else {
+            return Ok(());
+        };
         // If there is no new workflow run, exit early.
         if let Some(old_workflow_run) = old_workflow_run {
             if old_workflow_run.id == new_workflow_run.id {

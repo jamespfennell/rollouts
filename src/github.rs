@@ -93,7 +93,7 @@ impl<'a> Client<'a> {
         repo: &Repo,
         branch: &str,
         auth_token: &str,
-    ) -> Result<WorkflowRun, String> {
+    ) -> Result<Option<WorkflowRun>, String> {
         self.rate_limiter.lock().unwrap().check(auth_token)?;
 
         let url = format![
@@ -126,7 +126,7 @@ impl<'a> Client<'a> {
 
         if response.status() == 304 {
             if let Some((_, workflow_run)) = self.cache.lock().unwrap().get(&url) {
-                return Ok(workflow_run.clone());
+                return Ok(Some(workflow_run.clone()));
             }
         }
 
@@ -145,7 +145,9 @@ impl<'a> Client<'a> {
         };
         let workflow_run = match build.workflow_runs.pop() {
             Some(workflow_run) => workflow_run,
-            None => return Err("GitHub actions has no successful runs".to_string()),
+            // GitHub only retains workflows for 1 year, so it's expected that projects with
+            // no recent commits have no workflows.
+            None => return Ok(None),
         };
 
         // Update the cache before exiting.
@@ -160,7 +162,7 @@ impl<'a> Client<'a> {
         }
         use std::ops::Deref;
         database::set_typed(self.db, "github_client/cache".to_string(), cache.deref()).unwrap();
-        Ok(workflow_run)
+        Ok(Some(workflow_run))
     }
 
     pub fn rate_limit_info(&self) -> RateLimiter {
