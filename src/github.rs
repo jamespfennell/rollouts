@@ -107,7 +107,8 @@ impl<'a> Client<'a> {
         if !auth_token.is_empty() {
             request = request.set("Authorization", &format!["Bearer {auth_token}"]);
         }
-        if let Some((etag, _)) = self.cache.lock().unwrap().get(&url) {
+        let old_etag = self.cache.lock().unwrap().get(&url).map(|(s, _)| s.clone());
+        if let Some(etag) = &old_etag {
             request = request.set("if-none-match", etag);
             // Adding an authorization header with a dummy value seems
             // necessary in order for cached requests to not count against
@@ -130,7 +131,8 @@ impl<'a> Client<'a> {
             }
         }
 
-        let etag = response.header("etag").map(str::to_string);
+        let new_etag = response.header("etag").map(str::to_string);
+        eprintln!("[github] url={url}, old_eta={old_etag:?}, new_etag={new_etag:?}");
         let body: String = match response.into_string() {
             Ok(body) => body,
             Err(err) => return Err(format!("failed to read GitHub API response: {err}")),
@@ -154,10 +156,10 @@ impl<'a> Client<'a> {
         let mut cache = self.cache.lock().unwrap();
         if let Some((old_etag, cached_workflow_run)) = cache.get(&url) {
             if workflow_run.created_at < cached_workflow_run.created_at {
-                return Err(format!["GitHub returned a stale workflow run! old_etag={old_etag}, new_etag={etag:?},\ncached_workflow={cached_workflow_run:#?}\nbody=<begin>\n{body}\n<end>"]);
+                return Err(format!["GitHub returned a stale workflow run! old_etag={old_etag}, new_etag={new_etag:?},\ncached_workflow={cached_workflow_run:#?}\nbody=<begin>\n{body}\n<end>"]);
             }
         }
-        if let Some(etag) = etag {
+        if let Some(etag) = new_etag {
             cache.insert(url, (etag, workflow_run.clone()));
         }
         use std::ops::Deref;
