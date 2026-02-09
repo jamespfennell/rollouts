@@ -132,7 +132,7 @@ impl<'a> Client<'a> {
         }
 
         let new_etag = response.header("etag").map(str::to_string);
-        eprintln!("[github] url={url}, old_eta={old_etag:?}, new_etag={new_etag:?}");
+        eprintln!("[github] url={url}, old_etag={old_etag:?}, new_etag={new_etag:?}");
         let body: String = match response.into_string() {
             Ok(body) => body,
             Err(err) => return Err(format!("failed to read GitHub API response: {err}")),
@@ -149,7 +149,15 @@ impl<'a> Client<'a> {
             Some(workflow_run) => workflow_run,
             // GitHub only retains workflows for 1 year, so it's expected that projects with
             // no recent commits have no workflows.
-            None => return Ok(None),
+            None => {
+                if let Some(new_etag) = new_etag {
+                    let mut cache = self.cache.lock().unwrap();
+                    if let Some((etag, _)) = cache.get_mut(&url) {
+                        *etag = new_etag;
+                    }
+                }
+                return Ok(None);
+            }
         };
 
         // Update the cache before exiting.

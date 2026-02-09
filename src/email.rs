@@ -15,7 +15,9 @@ pub struct NoOpNotifier;
 
 impl Notifier for NoOpNotifier {
     fn notify(&self, title: &str, _body: &str) {
-        eprintln!("[email] notifications disabled; skipping sending notification with title {title}");
+        eprintln!(
+            "[email] notifications disabled; skipping sending notification with title {title}"
+        );
     }
 }
 
@@ -39,13 +41,13 @@ impl Notifier for Client {
             .unwrap()
             .build();
         match transport.test_connection() {
-            Ok(true) => {},
+            Ok(true) => {}
             Ok(false) => {
                 eprintln!("[email] failed to connect to SMTP server");
             }
             Err(err) => {
                 eprintln!("[email] failed to connect to SMTP server: {err:?}");
-            },
+            }
         }
         let email = Message::builder()
             .from(self.config.from.clone())
