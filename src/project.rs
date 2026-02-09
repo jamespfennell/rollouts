@@ -109,7 +109,10 @@ impl<'a> Manager<'a> {
             let loop_duration = chrono::Utc::now() - start;
             match self.poll_interval.checked_sub(&loop_duration) {
                 Some(remaining) => {
-                    if rx.recv_timeout(remaining.to_std().unwrap_or_default()).is_ok() {
+                    if rx
+                        .recv_timeout(remaining.to_std().unwrap_or_default())
+                        .is_ok()
+                    {
                         eprintln!(
                             "[project_manager] sleep interrupted because of shut down signal"
                         );

@@ -15,24 +15,17 @@ pub struct NoOpNotifier;
 
 impl Notifier for NoOpNotifier {
     fn notify(&self, title: &str, _body: &str) {
-        eprintln!("Notifications disabled; skipping sending notification with title {title}");
+        eprintln!("[email] notifications disabled; skipping sending notification with title {title}");
     }
 }
 
 pub struct Client {
     config: Config,
-    transport: smtp::SmtpTransport,
 }
 
 impl Client {
     pub fn new(config: Config) -> Self {
-        let transport = smtp::SmtpTransport::from_url(&config.smtp_url)
-            .unwrap()
-            .build();
-        if !transport.test_connection().unwrap() {
-            panic!("failed to connect")
-        }
-        Self { config, transport }
+        Self { config }
     }
 }
 
@@ -41,7 +34,19 @@ impl Notifier for Client {
         use lettre::message::header::ContentType;
         use lettre::Message;
         use lettre::Transport;
-        eprintln!("Sending email with title {title}");
+        eprintln!("[email] sending email with title {title}");
+        let transport = smtp::SmtpTransport::from_url(&self.config.smtp_url)
+            .unwrap()
+            .build();
+        match transport.test_connection() {
+            Ok(true) => {},
+            Ok(false) => {
+                eprintln!("[email] failed to connect to SMTP server");
+            }
+            Err(err) => {
+                eprintln!("[email] failed to connect to SMTP server: {err:?}");
+            },
+        }
         let email = Message::builder()
             .from(self.config.from.clone())
             .to(self.config.to.clone())
@@ -49,7 +54,7 @@ impl Notifier for Client {
             .header(ContentType::TEXT_PLAIN)
             .body(body.to_string())
             .unwrap();
-        match self.transport.send(&email) {
+        match transport.send(&email) {
             Ok(_) => eprintln!("Email sent successfully!"),
             Err(err) => eprintln!("Failed to send email: {err:?}"),
         }
