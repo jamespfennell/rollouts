@@ -235,6 +235,8 @@ function route() {
   const parts = hash.split('/');
   if (!hash) {
     renderOverview();
+  } else if (hash === 'agents') {
+    renderAgents();
   } else if (parts[0] === 'projects' && parts.length === 3) {
     renderProject(decodeURIComponent(parts[1]), decodeURIComponent(parts[2]));
   } else if (parts[0] === 'projects' && parts.length === 5 && parts[3] === 'deployments') {
@@ -242,6 +244,47 @@ function route() {
   } else {
     renderOverview();
   }
+}
+
+function renderAgents() {
+  let html = breadcrumb([{label: 'Rollouts', href: '#'}, {label: 'Agents'}]);
+  html += `<div class="page-title">Agents</div>`;
+  html += `<div class="page-subtitle" style="margin-bottom:24px;">${HOSTS.length} configured</div>`;
+
+  html += `<div class="section-label">Agents</div>`;
+  html += `<div class="card">`;
+  [...HOSTS].sort((a, b) => a.label.localeCompare(b.label)).forEach((h, i) => {
+    if (!h.data) {
+      html += `<div class="deployment-row" style="cursor:default;${i===0?'border-top:none;':''}">
+        <div class="deployment-row-left">
+          <div class="deployment-row-title">${esc(h.label)}</div>
+          <div class="deployment-row-meta" style="color:#b91c1c;">Failed to load: ${esc(h.error)}</div>
+        </div>
+      </div>`;
+      return;
+    }
+    const projects = h.data.projects;
+    const failed = projects.filter(p => p.run_results[0] && !p.run_results[0].success).length;
+    const pending = projects.filter(p => p.pending).length;
+    const ok = projects.filter(p => p.run_results[0]?.success).length;
+    const summary = [
+      ok     ? `${ok} deployed`  : '',
+      failed ? `${failed} failed`  : '',
+      pending? `${pending} pending` : '',
+    ].filter(Boolean).join(' · ') || 'No deployments';
+
+    html += `<div class="deployment-row" style="${i===0?'border-top:none;':''}">
+      <div class="deployment-row-left">
+        <div class="deployment-row-title">
+          <a href="https://${esc(h.label)}">${esc(h.label)}</a>
+        </div>
+        <div class="deployment-row-meta">${esc(h.data.hostname)} &nbsp;·&nbsp; ${projects.length} projects &nbsp;·&nbsp; ${esc(summary)}</div>
+      </div>
+    </div>`;
+  });
+  html += `</div>`;
+
+  render(html);
 }
 
 function lastActivity(p) {
@@ -460,9 +503,12 @@ async function init() {
   }
 
   const valid = HOSTS.filter(h => h.data);
-  document.getElementById('hostname').textContent = valid.length === 1
-    ? valid[0].label
-    : `${valid.length} hosts`;
+  const hostnameEl = document.getElementById('hostname');
+  if (valid.length === 1) {
+    hostnameEl.textContent = valid[0].label;
+  } else {
+    hostnameEl.innerHTML = `<a href="#/agents" style="color:#666;">${valid.length} agents</a>`;
+  }
 
   route();
 }
