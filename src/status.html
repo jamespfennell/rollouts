@@ -3,268 +3,471 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rollouts agent</title>
+<title>Rollouts</title>
 <style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #f5f5f5;
+  color: #1a1a1a;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+a { color: #2563eb; text-decoration: none; }
+a:hover { text-decoration: underline; }
 
 .container {
-    max-width: 750px;
-    margin: 0px auto;
-    font-family: sans-serif;
-}
-a {
-  color: royalblue;
-  text-underline-position: under;
-}
-.greenText {
-    color: seagreen;
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 32px 16px;
 }
 
-.green {
-    color: seagreen;
-    background: seagreen;
+.site-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 32px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #ddd;
 }
-.greenBorder {
-  border-left: 5px solid seagreen;
-}
-.redBorder {
-  border-left: 5px solid indianred;
-}
-.redText {
-    color: indianred;
-}
-.red {
-    color: indianred;
-    background-color: indianred;
-}
-.orange {
-  background-color: sandybrown;
-}
+.site-header h1 { font-size: 1.1rem; font-weight: 600; }
+.site-header h1 a { color: inherit; }
+.site-header .hostname { color: #666; font-size: 0.875rem; }
 
-.project {
-  margin: 30px 0px; 
-  padding: 0px 0px 0px 10px;
-}
-.project > p {
-  padding: 0px 0px 0px 10px;
-}
-.projectWidget {
-  border: 1px solid #bbb;
-  border-radius: 10px;
-  margin-bottom: 10px;
-  background-color: #efefef;
-}
-.projectWidget > summary {
-  padding: 15px 10px;
-  font-size: 0.9em;
-  cursor: pointer;
-}
-.projectWidget > div {
-  background-color: white;
-  border-radius: 0px 0px 10px 10px;
-}
-
-.deployment {
-  border-top: 1px solid #bbb;
-  padding: 10px;
-}
-.deployment > .header {
+.breadcrumb {
   display: flex;
   align-items: center;
+  gap: 6px;
+  font-size: 0.875rem;
+  margin-bottom: 20px;
+  color: #555;
 }
-.deployment > .header > .circle {
-  width: 20px;
-  height: 20px;
-  border-radius: 10px;
-  font-size: 2.5em;
-  margin: 0px 6px 0px 0px;
+.breadcrumb a { color: #555; }
+.breadcrumb a:hover { color: #1a1a1a; text-decoration: underline; }
+.breadcrumb .sep { color: #bbb; }
+
+.page-title { font-size: 1.4rem; font-weight: 700; margin-bottom: 4px; }
+.page-subtitle { color: #444; font-size: 0.9rem; margin-bottom: 24px; }
+
+.section-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #777;
+  margin-bottom: 8px;
 }
-.deployment > .header > .title {
-  margin: 8px 0px 4px 0px;
-  font-weight: bold;
+
+.badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 99px;
+  letter-spacing: 0.02em;
 }
-.deployment > .body {
-  margin: 0;
-  margin-left: 30px;
-  font-size: 0.9em;
+.badge-green  { background: #dcfce7; color: #15803d; }
+.badge-red    { background: #fee2e2; color: #b91c1c; }
+.badge-orange { background: #ffedd5; color: #c2410c; }
+.badge-gray   { background: #f3f4f6; color: #6b7280; }
+
+.card {
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  overflow: hidden;
 }
-.deployment > .body a {
-  color: #444;
+.card + .card { margin-top: 10px; }
+
+/* Project cards */
+.project-card {
+  padding: 14px 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
-.deployment > .body p {
-  padding: 0;
-  margin: 5px 0px;
-  color: #444;
-}
-.deployment > .body > details {
-  margin: 5px 0px;
-  padding: 5px;
-}
-.deployment summary {
-  color: #444;
+.project-card:hover { background: #fafafa; }
+.project-card-left { flex: 1; min-width: 0; }
+.project-card-name { font-weight: 600; }
+.project-card-meta { font-size: 0.85rem; color: #555; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Deployment rows */
+.deployment-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  border-top: 1px solid #eee;
   cursor: pointer;
 }
-.deployment .logs {
-  background-color: black;
-  color: white;
-  border-radius: 10px;
-  margin-top: 15px;
-  padding: 5px;
+.deployment-row:first-child { border-top: none; }
+.deployment-row:hover { background: #fafafa; }
+.deployment-row-left { flex: 1; min-width: 0; }
+.deployment-row-title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.deployment-row-meta { font-size: 0.85rem; color: #555; margin-top: 2px; }
+.deployment-row-arrow { color: #999; font-size: 1rem; flex-shrink: 0; }
+
+/* Pending */
+.pending-card {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 14px 18px;
+  margin-bottom: 20px;
 }
-.deployment .logs > div {
-  padding: 10px;
+.pending-card-title { font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+.pending-card-meta { font-size: 0.85rem; color: #78350f; }
+
+/* Steps */
+.step { border-top: 1px solid #eee; padding: 16px 18px; }
+.step:first-child { border-top: none; }
+.step-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.step-name { font-weight: 600; }
+.step-cmd { font-family: ui-monospace, monospace; font-size: 0.8rem; color: #444; margin-bottom: 10px; }
+.step-logs {
+  background: #111;
+  color: #e5e5e5;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  border-radius: 6px;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+  overflow-x: auto;
 }
-.deployment .logs > pre {
-  overflow-y: auto;
-  margin: 0px;
-  padding: 5px 10px;
+
+/* Rate limits */
+.rate-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.rate-table th { text-align: left; padding: 8px 12px; border-bottom: 1px solid #ddd; color: #555; font-weight: 500; }
+.rate-table td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; }
+.rate-table tr:last-child td { border-bottom: none; }
+
+.config-pre {
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  padding: 16px 18px;
+  white-space: pre-wrap;
+  color: #333;
 }
+
+details > summary { cursor: pointer; list-style: none; }
+details > summary::-webkit-details-marker { display: none; }
 </style>
 </head>
 <body>
 <div class="container">
-<h1>Rollouts agent</h1>
-
-<p>
-  {{ hostname }}
-</p>
-<p>
-  <a href="https://github.com/jamespfennell/rollouts">github.com/jamespfennell/rollouts</a>
-</p>
-
-<h2>Projects</h2>
-
-<!--
-Table of contents, if we ever want it back.
-<ul>
-{{ #each projects }}
-    <li><a href="#projects-{{config.name}}">{{ config.name }}</a></li>
-{{ /each }}
-</ul>
--->
-
-{{ #each projects }}
-<a name="projects-{{config.name}}"></a>
-<div class="project {{#if run_results.[0]}}{{#with run_results.[0]}}{{ #if success }}greenBorder{{ else }}redBorder{{ /if }}{{/with}}{{/if }}">
-  <h3>{{config.name}}</h3>
-  <p>
-    <a href="https://{{ config.repo }}">
-      {{ config.repo }}
-    </a>
-  </p>
-  <p>
-    {{#if run_results.[0]}}
-      {{#with run_results.[0]}}
-        Last {{ #if success }}deployed{{ else }}failed{{ /if }}
-        {{ duration_since finished }}.
-      {{/with}}
-    {{ else }}
-    Never deployed.
-    {{/if}}
-  </p>
-
-  {{#if pending }}
-  <details class="projectWidget" open>
-    <summary>
-      Pending deployment
-    </summary>
-    <div>
-      <div class="deployment">
-        <div class="header">
-          <div class="circle orange"></div>
-          <div class="title">
-            {{ pending.workflow_run.display_title }}
-          </div>
-        </div>
-        <div class="body">
-          <p>
-            <a href="{{ pending.workflow_run.html_url }}">Build #{{ pending.workflow_run.run_number }}.</a>
-            Deploying {{ duration_to pending.run_time }}.
-          </p>
-        </div>
-      </div>
-    </div>
-  </details>
-  {{ else }}
-  <p>
-    No pending deployment.
-  </p>
-  {{/if}}
-
-  <details class="projectWidget">
-    <summary>
-      Most recent deployments
-    </summary>
-    <div>
-      {{ #each run_results }}
-      <div class="deployment">
-        <div class="header">
-          <div class="circle {{ #if success }}green{{ else }}red{{ /if }}"></div>
-          <div class="title">
-            {{ workflow_run.display_title }}
-          </div>
-        </div>
-        <div class="body">
-          <p>
-            <a href="{{ workflow_run.html_url }}">Build #{{ workflow_run.run_number }}.</a>
-            {{ #if success }}Deployed{{ else }}Failed{{ /if }}
-            {{ duration_since finished }}.
-          </p>
-          <details>
-            <summary>Deployment logs</summary>
-            <div class="logs">
-
-              {{ #each steps }}
-              <div>{{ config.name }}</div>
-              <pre>
-<b>$ {{ config.run }}</b>
-{{ stderr }}
-{{ #if success }}<b class="greenText">Success</b>{{ else }}<b class="redText">Failure</b>{{ /if }}
-              </pre>
-              {{ /each }}
-
-            </div>
-          </details>
-        </div>
-      </div>
-      {{ /each }}
-    </div>
-  </details>
-
-
-
-<details class="projectWidget">
-  <summary>Project configuration</summary>
-  <div class="deployment">
-    <pre style="border: 0; background-color: white;">{{ json_pretty config }}</pre>
+  <div class="site-header">
+    <h1><a href="#">Rollouts</a></h1>
+    <span class="hostname" id="hostname"></span>
   </div>
-</details>
-
+  <div id="app"></div>
 </div>
 
+<script>
+const AGENTS = __AGENTS__;
+let HOSTS = []; // [{label, data}] — data is null if fetch failed
+let sortAlpha = false;
 
-{{ /each }}
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 
+function durationSince(iso) {
+  if (!iso) return 'unknown';
+  const m = (Date.now() - new Date(iso)) / 60000;
+  if (m <= 1)   return 'just now';
+  if (m < 60)   return `${Math.floor(m)}m ago`;
+  if (m < 1440) return `${Math.floor(m/60)}h ago`;
+  if (m < 21600)return `${Math.floor(m/1440)}d ago`;
+  return `${Math.floor(m/10080)}w ago`;
+}
 
-<h2>GitHub client</h2>
+function durationTo(iso) {
+  if (!iso) return 'unknown';
+  const m = (new Date(iso) - Date.now()) / 60000;
+  if (m <= 1)   return 'imminently';
+  if (m < 60)   return `in ${Math.floor(m)}m`;
+  if (m < 1440) return `in ${Math.floor(m/60)}h`;
+  if (m < 21600)return `in ${Math.floor(m/1440)}d`;
+  return `in ${Math.floor(m/10080)}w`;
+}
 
-<h3>Rate limiting data</h3>
+function formatDuration(start, end) {
+  const s = Math.round((new Date(end) - new Date(start)) / 1000);
+  return s < 60 ? `${s}s` : `${Math.floor(s/60)}m ${s%60}s`;
+}
 
-<table>
-  <tr>
-    <th>resource</th>
-    <th>used/limit</th>
-    <th>resetting</th>
-  </tr>
-  {{ #each rate_limit_info.resource_to_info as |info key| }}
-  <tr>
-    <td>{{ info.resource }}</td>
-    <td>{{ info.used }}/{{ info.limit }}</td>
-    <td>{{ duration_to info.reset }}</td>
-  </tr>
-  {{ /each }}
-</table>
+function badge(success, text) {
+  if (text)             return `<span class="badge badge-orange">${esc(text)}</span>`;
+  if (success === true) return `<span class="badge badge-green">Deployed</span>`;
+  if (success === false)return `<span class="badge badge-red">Failed</span>`;
+  return `<span class="badge badge-gray">Never deployed</span>`;
+}
 
-</div>
+function breadcrumb(crumbs) {
+  return `<div class="breadcrumb">${crumbs.map((c,i) =>
+    i < crumbs.length - 1
+      ? `<a href="${esc(c.href)}">${esc(c.label)}</a><span class="sep">/</span>`
+      : `<span>${esc(c.label)}</span>`
+  ).join('')}</div>`;
+}
 
+function render(html) {
+  document.getElementById('app').innerHTML = html;
+  const f = document.getElementById('filter');
+  if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
+}
+
+function projectUrl(host, name) {
+  return `#/projects/${encodeURIComponent(host)}/${encodeURIComponent(name)}`;
+}
+
+function deploymentUrl(host, name, index) {
+  return `#/projects/${encodeURIComponent(host)}/${encodeURIComponent(name)}/deployments/${index}`;
+}
+
+function route() {
+  const hash = location.hash.replace(/^#\/?/, '');
+  const parts = hash.split('/');
+  if (!hash) {
+    renderOverview();
+  } else if (parts[0] === 'projects' && parts.length === 3) {
+    renderProject(decodeURIComponent(parts[1]), decodeURIComponent(parts[2]));
+  } else if (parts[0] === 'projects' && parts.length === 5 && parts[3] === 'deployments') {
+    renderDeployment(decodeURIComponent(parts[1]), decodeURIComponent(parts[2]), parseInt(parts[4]));
+  } else {
+    renderOverview();
+  }
+}
+
+function lastActivity(p) {
+  if (p.pending) return new Date(p.pending.first_seen).getTime();
+  if (p.run_results[0]) return new Date(p.run_results[0].finished).getTime();
+  return -Infinity;
+}
+
+function renderOverview(filter) {
+  filter = filter || '';
+  let html = '';
+
+  const failed = HOSTS.filter(h => !h.data);
+  failed.forEach(h => {
+    html += `<div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:12px 16px;margin-bottom:10px;font-size:0.875rem;color:#991b1b;">
+      Failed to load <strong>${esc(h.label)}</strong>: ${esc(h.error)}
+    </div>`;
+  });
+
+  const allProjects = HOSTS.filter(h => h.data)
+    .flatMap(h => h.data.projects.map(p => ({...p, _host: h.label})));
+
+  if (allProjects.length === 0 && failed.length === 0) {
+    html += '<p style="color:#666;">No projects configured.</p>';
+  } else if (allProjects.length > 0) {
+    html += `<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;">
+      <div class="section-label" style="margin-bottom:0;">Projects</div>
+      <span style="font-size:0.75rem;color:#666;">
+        Sort:
+        <span onclick="sortAlpha=false;renderOverview(document.getElementById('filter').value)"
+          style="cursor:pointer;${!sortAlpha ? 'font-weight:700;color:#333;' : ''}">Recent Activity</span>
+        |
+        <span onclick="sortAlpha=true;renderOverview(document.getElementById('filter').value)"
+          style="cursor:pointer;${sortAlpha ? 'font-weight:700;color:#333;' : ''}">A → Z</span>
+      </span>
+    </div>
+    <input id="filter" type="text" placeholder="Filter projects…" value="${esc(filter)}"
+      style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:0.9rem;margin-bottom:12px;outline:none;"
+      oninput="renderOverview(this.value)">`;
+
+    const q = filter.toLowerCase();
+    const visible = allProjects
+      .filter(p => p.config.name.toLowerCase().includes(q)
+               || p.config.repo.toLowerCase().includes(q)
+               || p._host.toLowerCase().includes(q))
+      .sort(sortAlpha
+        ? (a, b) => a.config.name.localeCompare(b.config.name)
+        : (a, b) => lastActivity(b) - lastActivity(a));
+
+    if (visible.length === 0) {
+      html += `<p style="color:#666;">No projects match.</p>`;
+    }
+    visible.forEach((p, i) => {
+      const last = p.run_results[0];
+      const b = p.pending ? badge(null, 'Pending') : last ? badge(last.success) : badge(null);
+      let meta = '';
+      if (p.pending)    meta = `Deploying ${durationTo(p.pending.run_time)}`;
+      else if (last)    meta = `${last.success ? 'Deployed' : 'Failed'} ${durationSince(last.finished)}`;
+      else              meta = 'Never deployed';
+
+      html += `<div class="card" style="${i > 0 ? 'margin-top:10px;' : ''}">
+        <div class="project-card" onclick="location.hash=projectUrl('${p._host.replace(/'/g,"\\'")}','${p.config.name.replace(/'/g,"\\'")}').slice(1)">
+          <div class="project-card-left">
+            <div class="project-card-name">${esc(p.config.name)}</div>
+            <div class="project-card-meta">
+              ${esc(p._host)} &nbsp;·&nbsp; ${esc(meta)}
+            </div>
+          </div>
+          ${b}
+        </div>
+      </div>`;
+    });
+  }
+
+  const hostsWithData = HOSTS.filter(h => h.data);
+  const multiHost = hostsWithData.length > 1;
+  if (hostsWithData.length > 0) {
+    html += `<div style="margin-top:40px;">
+      <div class="section-label">GitHub rate limits</div>
+      <div class="card">
+        <table class="rate-table">
+          <thead><tr>${multiHost ? '<th>Host</th>' : ''}<th>Resource</th><th>Used / Limit</th><th>Resets</th></tr></thead>
+          <tbody>${[...hostsWithData].sort((a,b) => a.label.localeCompare(b.label)).flatMap(h =>
+            Object.values(h.data.rate_limit_info.resource_to_info || {}).map(info => `<tr>
+              ${multiHost ? `<td>${esc(h.label)}</td>` : ''}
+              <td>${esc(info.resource)}</td>
+              <td>${info.used} / ${info.limit}</td>
+              <td>${durationTo(info.reset)}</td>
+            </tr>`)
+          ).join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+
+  render(html);
+}
+
+function renderProject(hostLabel, name) {
+  const host = HOSTS.find(h => h.label === hostLabel);
+  if (!host?.data) { renderOverview(); return; }
+  const p = host.data.projects.find(p => p.config.name === name);
+  if (!p) { renderOverview(); return; }
+
+  let html = breadcrumb([{label: 'Rollouts', href: '#'}, {label: name}]);
+
+  html += `<div class="page-title">${esc(p.config.name)}</div>
+  <div class="page-subtitle">
+    Rollouts host: <a href="https://${esc(hostLabel)}">${esc(hostLabel)}</a><br>
+    <a href="https://${esc(p.config.repo)}">${esc(p.config.repo)}</a>
+    &nbsp;·&nbsp;branch: <code>${esc(p.config.branch)}</code>
+  </div>`;
+
+  if (p.pending) {
+    html += `<div class="pending-card">
+      <div class="pending-card-title">
+        ${badge(null, 'Pending')} ${esc(p.pending.workflow_run.display_title)}
+      </div>
+      <div class="pending-card-meta">
+        <a href="${esc(p.pending.workflow_run.html_url)}" style="color:inherit;">Build #${p.pending.workflow_run.run_number}</a>
+        &nbsp;·&nbsp;Deploying ${durationTo(p.pending.run_time)}
+      </div>
+    </div>`;
+  }
+
+  html += `<div class="section-label">Deployments</div>`;
+  if (p.run_results.length === 0) {
+    html += `<div class="card" style="padding:14px 18px; color:#666;">No deployments yet.</div>`;
+  } else {
+    html += `<div class="card">${p.run_results.map((r, i) => `
+      <div class="deployment-row" onclick="location.hash=deploymentUrl('${hostLabel.replace(/'/g,"\\'")}','${name.replace(/'/g,"\\'")}',${i}).slice(1)">
+        <div>${badge(r.success)}</div>
+        <div class="deployment-row-left">
+          <div class="deployment-row-title">${esc(r.workflow_run.display_title)}</div>
+          <div class="deployment-row-meta">Build #${r.workflow_run.run_number} &nbsp;·&nbsp; ${r.success ? 'Deployed' : 'Failed'} ${durationSince(r.finished)}</div>
+        </div>
+        <div class="deployment-row-arrow">›</div>
+      </div>`).join('')}</div>`;
+  }
+
+  html += `<div style="margin-top:24px;">
+    <div class="section-label">Configuration</div>
+    <div class="card">
+      <pre class="config-pre">${esc(JSON.stringify(p.config, null, 2))}</pre>
+    </div>
+  </div>`;
+
+  render(html);
+}
+
+function renderDeployment(hostLabel, name, index) {
+  const host = HOSTS.find(h => h.label === hostLabel);
+  if (!host?.data) { renderOverview(); return; }
+  const p = host.data.projects.find(p => p.config.name === name);
+  if (!p) { renderOverview(); return; }
+  const r = p.run_results[index];
+  if (!r) { renderProject(hostLabel, name); return; }
+
+  let html = breadcrumb([
+    {label: 'Rollouts', href: '#'},
+    {label: name, href: projectUrl(hostLabel, name)},
+    {label: `Build #${r.workflow_run.run_number}`},
+  ]);
+
+  html += `<div class="page-title">${esc(r.workflow_run.display_title)}</div>
+  <div class="page-subtitle">
+    ${badge(r.success)}
+    &nbsp;
+    <a href="${esc(r.workflow_run.html_url)}">Build #${r.workflow_run.run_number}</a>
+    &nbsp;·&nbsp;${r.success ? 'Deployed' : 'Failed'} ${durationSince(r.finished)}
+    ${r.started && r.finished ? `&nbsp;·&nbsp;${formatDuration(r.started, r.finished)}` : ''}
+  </div>`;
+
+  if (r.steps.length === 0) {
+    html += `<div class="card" style="padding:14px 18px; color:#666;">No steps recorded.</div>`;
+  } else {
+    html += `<div class="card">${r.steps.map(step => `
+      <div class="step">
+        <div class="step-header">
+          <span class="step-name">${esc(step.config.name || '')}</span>
+          ${badge(step.success)}
+        </div>
+        <div class="step-cmd">$ ${esc(step.config.run || '')}</div>
+        ${step.stderr ? `<pre class="step-logs">${esc(step.stderr)}</pre>` : ''}
+      </div>`).join('')}</div>`;
+  }
+
+  render(html);
+}
+
+window.addEventListener('hashchange', route);
+
+async function init() {
+  const hostStrings = AGENTS;
+
+  async function fetchHost(hostStr) {
+    const baseUrl = hostStr && !hostStr.includes('://') ? `https://${hostStr}` : hostStr;
+    const resp = await fetch(`${baseUrl}/status.json`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    return {label: hostStr || data.hostname, data};
+  }
+
+  if (hostStrings.length === 0) {
+    try {
+      HOSTS = [await fetchHost('')];
+    } catch(e) {
+      document.getElementById('app').textContent = `Failed to load status data: ${e.message}`;
+      return;
+    }
+  } else {
+    const results = await Promise.allSettled(hostStrings.map(fetchHost));
+    HOSTS = results.map((r, i) => r.status === 'fulfilled'
+      ? r.value
+      : {label: hostStrings[i], data: null, error: r.reason.message});
+  }
+
+  const valid = HOSTS.filter(h => h.data);
+  document.getElementById('hostname').textContent = valid.length === 1
+    ? valid[0].label
+    : `${valid.length} hosts`;
+
+  route();
+}
+
+init();
+</script>
 </body>
 </html>

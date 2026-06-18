@@ -9,7 +9,6 @@ pub struct Service<'a> {
     hostname: String,
     github_client: &'a github::Client<'a>,
     project_manager: &'a project::Manager<'a>,
-    templates: handlebars::Handlebars<'static>,
 }
 
 impl<'a> Service<'a> {
@@ -18,26 +17,17 @@ impl<'a> Service<'a> {
         github_client: &'a github::Client,
         project_manager: &'a project::Manager,
     ) -> Self {
-        let mut templates = handlebars::Handlebars::new();
-        templates.set_strict_mode(true);
-        templates
-            .register_template_string("status.html", STATUS_DOT_HTML)
-            .unwrap();
-        templates.register_helper("duration_since", Box::new(helper::duration_since));
-        templates.register_helper("duration_to", Box::new(helper::duration_to));
-        templates.register_helper("json_pretty", Box::new(helper::json_pretty));
         Self {
             hostname,
             github_client,
             project_manager,
-            templates,
         }
     }
-    pub fn start<'scope>(&'a self, scope: &'scope thread::Scope<'scope, 'a>) -> Stopper {
-        let server = sync::Arc::new(tiny_http::Server::http("0.0.0.0:8000").unwrap());
+    pub fn start<'scope>(&'a self, scope: &'scope thread::Scope<'scope, 'a>, port: u16) -> Stopper {
+        let server = sync::Arc::new(tiny_http::Server::http(format!("0.0.0.0:{port}")).unwrap());
         let server_cloned = server.clone();
         scope.spawn(move || {
-            eprintln!("[http_service] listening for requests");
+            eprintln!("[http_service] listening for requests on port {port}");
             for request in server_cloned.incoming_requests() {
                 match request.method() {
                     tiny_http::Method::Get => {}
@@ -47,7 +37,8 @@ impl<'a> Service<'a> {
                         continue;
                     }
                 }
-                let (data, content_type) = match request.url() {
+                let path = request.url().split('?').next().unwrap_or("/");
+                let (data, content_type) = match path {
                     "/" | "/index.html" => (self.index_html(), "text/html; charset=UTF-8"),
                     "/status.json" => (self.status_json(), "application/json; charset=UTF-8"),
                     _ => {
@@ -64,19 +55,15 @@ impl<'a> Service<'a> {
         Stopper { server }
     }
     fn index_html(&self) -> String {
-        let data = self.data();
-        self.templates.render("status.html", &data).unwrap()
+        STATUS_DOT_HTML.to_string()
     }
     fn status_json(&self) -> String {
-        let data = self.data();
-        serde_json::to_string_pretty(&data).unwrap()
-    }
-    fn data(&self) -> Data {
-        Data {
+        let data = Data {
             hostname: self.hostname.clone(),
             projects: self.project_manager.projects(),
             rate_limit_info: self.github_client.rate_limit_info(),
-        }
+        };
+        serde_json::to_string_pretty(&data).unwrap()
     }
 }
 
@@ -92,6 +79,35 @@ impl Stopper {
     }
 }
 
+pub fn start_ui<'scope>(
+    scope: &'scope thread::Scope<'scope, '_>,
+    port: u16,
+    agents: Vec<String>,
+) -> Stopper {
+    let agents_json = serde_json::to_string(&agents).unwrap();
+    let html = STATUS_DOT_HTML.replace("__AGENTS__", &agents_json);
+    let server = sync::Arc::new(tiny_http::Server::http(format!("0.0.0.0:{port}")).unwrap());
+    let server_cloned = server.clone();
+    scope.spawn(move || {
+        eprintln!("[http_service] ui-only server listening on port {port}");
+        for request in server_cloned.incoming_requests() {
+            let path = request.url().split('?').next().unwrap_or("/");
+            let (status, body, content_type) = match (request.method(), path) {
+                (tiny_http::Method::Get, "/" | "/index.html") => {
+                    (200u16, html.clone(), "text/html; charset=UTF-8")
+                }
+                _ => (404, "Not found".to_string(), "text/plain"),
+            };
+            let header = tiny_http::Header::from_bytes("Content-Type", content_type).unwrap();
+            let response = tiny_http::Response::from_string(body)
+                .with_status_code(tiny_http::StatusCode(status))
+                .with_header(header);
+            request.respond(response).unwrap();
+        }
+    });
+    Stopper { server }
+}
+
 static STATUS_DOT_HTML: &str = include_str!("status.html");
 
 #[derive(Debug, serde::Serialize)]
@@ -99,87 +115,4 @@ struct Data {
     hostname: String,
     projects: Vec<project::Project>,
     rate_limit_info: github::RateLimiter,
-}
-
-mod helper {
-    use handlebars::*;
-    pub fn json_pretty(
-        h: &Helper,
-        _: &Handlebars,
-        _: &Context,
-        _: &mut RenderContext,
-        out: &mut dyn Output,
-    ) -> HelperResult {
-        let param = h.param(0).unwrap();
-        let value = param.value();
-        let pretty = serde_json::to_string_pretty(value).unwrap();
-        write!(out, "{}", pretty)?;
-        Ok(())
-    }
-
-    pub fn duration_since(
-        h: &Helper,
-        _: &Handlebars,
-        _: &Context,
-        _: &mut RenderContext,
-        out: &mut dyn Output,
-    ) -> HelperResult {
-        let param = h.param(0).unwrap();
-        let i = param.value().render();
-        if i.is_empty() {
-            out.write("at an unknown time")?;
-            return Ok(());
-        }
-        let i = format!("\"{i}\"");
-        let t: chrono::DateTime<chrono::Utc> = serde_json::from_str(&i).unwrap();
-        let d = chrono::Utc::now() - t;
-        let (i, s) = if d.num_minutes() <= 1 {
-            write!(out, "just now")?;
-            return Ok(());
-        } else if d.num_minutes() < 60 {
-            (d.num_minutes(), "minute")
-        } else if d.num_hours() < 24 {
-            (d.num_hours(), "hour")
-        } else if d.num_days() < 15 {
-            (d.num_days(), "day")
-        } else {
-            (d.num_weeks(), "week")
-        };
-        let p = if i == 1 { "" } else { "s" };
-        write!(out, "{i} {s}{p} ago")?;
-        Ok(())
-    }
-
-    pub fn duration_to(
-        h: &Helper,
-        _: &Handlebars,
-        _: &Context,
-        _: &mut RenderContext,
-        out: &mut dyn Output,
-    ) -> HelperResult {
-        let param = h.param(0).unwrap();
-        let i = param.value().render();
-        if i.is_empty() {
-            out.write("at an unknown time")?;
-            return Ok(());
-        }
-        let i = format!("\"{i}\"");
-        let t: chrono::DateTime<chrono::Utc> = serde_json::from_str(&i).unwrap();
-        let d = t - chrono::Utc::now();
-        let (i, s) = if d.num_minutes() <= 1 {
-            write!(out, "imminently")?;
-            return Ok(());
-        } else if d.num_minutes() < 60 {
-            (d.num_minutes(), "minute")
-        } else if d.num_hours() < 24 {
-            (d.num_hours(), "hour")
-        } else if d.num_days() < 15 {
-            (d.num_days(), "day")
-        } else {
-            (d.num_weeks(), "week")
-        };
-        let p = if i == 1 { "" } else { "s" };
-        write!(out, "in {i} {s}{p}")?;
-        Ok(())
-    }
 }
