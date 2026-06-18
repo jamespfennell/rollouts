@@ -55,7 +55,7 @@ impl<'a> Service<'a> {
         Stopper { server }
     }
     fn index_html(&self) -> String {
-        STATUS_DOT_HTML.to_string()
+        STATUS_DOT_HTML.replace("__AGENTS__", "[]")
     }
     fn status_json(&self) -> String {
         let data = Data {
