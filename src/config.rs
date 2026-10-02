@@ -69,7 +69,7 @@ pub struct ProjectConfig {
     /// Shorthand for redeploying the project using Docker Compose.
     ///
     /// If set, the redeployment starts with the steps `docker compose pull`
-    ///     and `docker compose up -d <services>`.
+    ///     and `docker compose up -d --remove-orphans <services>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compose: Option<ComposeConfig>,
 
@@ -182,7 +182,7 @@ impl ProjectConfig {
                 name: "Pull".into(),
                 run: "docker compose pull".into(),
             });
-            let mut run = "docker compose up -d".to_string();
+            let mut run = "docker compose up -d --remove-orphans".to_string();
             for service in &compose.services {
                 run.push(' ');
                 run.push_str(&shlex::quote(service));
@@ -272,7 +272,7 @@ check:
             runs,
             vec![
                 "docker compose pull",
-                "docker compose up -d web docs",
+                "docker compose up -d --remove-orphans web docs",
                 "echo middle",
                 "curl --fail-with-body -v --retry 10 --retry-delay 3 --retry-all-errors --output /dev/null https://example.com/a",
             ]
