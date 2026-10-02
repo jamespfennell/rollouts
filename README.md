@@ -14,6 +14,12 @@ The repositories to watch and the VM commands to execute are specified using a c
 An example of this config file is `config.yml` and the full spec with documentation
     is at `src/config.rs`.
 
+Two optional shorthands cover the common Docker case:
+    `compose` adds `docker compose pull` and `docker compose up -d` steps,
+    and `check` adds a curl step (with retries) for each URL.
+Projects can also live in their own files, listed under `include` in the main config;
+    an included project's working directory defaults to the directory containing its file.
+
 To run the agent in the repository root, simply run `cargo run -- $PATH_TO_CONFIG_FILE`.
 
 To persist the state of the agent across runs,

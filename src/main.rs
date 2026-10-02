@@ -101,19 +101,7 @@ impl Cli {
             .config
             .as_ref()
             .ok_or("config is required in agent mode")?;
-        let raw_config = match std::fs::read_to_string(config_path) {
-            Ok(s) => s,
-            Err(err) => {
-                return Err(format!(
-                    "failed to read configuration file {}: {err}",
-                    config_path.display()
-                ))
-            }
-        };
-        let config: config::Config = match serde_yaml::from_str(&raw_config) {
-            Ok(config) => config,
-            Err(err) => return Err(format!("failed to parse YAML configuration file: {err}")),
-        };
+        let config = config::load(config_path)?;
         eprintln!(
             "[main] loaded the configuration containing {} projects",
             config.projects.len()
