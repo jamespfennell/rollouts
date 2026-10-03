@@ -332,7 +332,11 @@ function renderOverview(filter) {
                || p._host.toLowerCase().includes(q))
       .sort(sortAlpha
         ? (a, b) => a.config.name.localeCompare(b.config.name)
-        : (a, b) => lastActivity(b) - lastActivity(a));
+        // Pending deployments always come first, the most distant deployment first.
+        : (a, b) => (!!b.pending - !!a.pending)
+          || (a.pending && b.pending
+            ? new Date(b.pending.run_time) - new Date(a.pending.run_time)
+            : lastActivity(b) - lastActivity(a)));
 
     if (visible.length === 0) {
       html += `<p style="color:#666;">No projects match.</p>`;
