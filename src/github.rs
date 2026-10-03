@@ -7,6 +7,7 @@ use chrono::TimeZone;
 use chrono::Utc;
 
 use crate::database;
+use crate::metrics;
 
 /// A GitHub Repo.
 #[derive(Clone, Debug)]
@@ -58,7 +59,10 @@ impl<'de> serde::Deserialize<'de> for Repo {
 ///     and tries to cache requests using the HTTP etag header.
 pub struct Client<'a> {
     agent: ureq::Agent,
-    cache: sync::Mutex<HashMap<String, (String, WorkflowRun)>>,
+    /// Map from URL to the etag of the last response and the workflow run in it.
+    /// The workflow run is None if the response contained no workflow runs;
+    /// these responses are cached too so that subsequent requests are conditional.
+    cache: sync::Mutex<HashMap<String, (String, Option<WorkflowRun>)>>,
     rate_limiter: sync::Mutex<RateLimiter>,
     db: &'a dyn database::DB,
 }
@@ -73,7 +77,9 @@ impl<'a> Client<'a> {
                 .unwrap_or_default()
                 .unwrap_or_default(),
         );
-        let rate_limiter = sync::Mutex::new(RateLimiter::new(db));
+        let rate_limiter = RateLimiter::new(db);
+        rate_limiter.update_metrics();
+        let rate_limiter = sync::Mutex::new(rate_limiter);
         Self {
             agent,
             cache,
@@ -88,13 +94,23 @@ impl<'a> Client<'a> {
     ///
     /// The provided auth token can be empty.
     /// See the commands on the auth token config for more information about this.
+    ///
+    /// The project name is only used to label metrics.
     pub fn get_latest_successful_workflow_run(
         &self,
+        project: &str,
         repo: &Repo,
         branch: &str,
         auth_token: &str,
     ) -> Result<Option<WorkflowRun>, String> {
-        self.rate_limiter.lock().unwrap().check(auth_token)?;
+        let metrics = metrics::get();
+        if let Err(err) = self.rate_limiter.lock().unwrap().check(auth_token) {
+            metrics
+                .github_rate_limited
+                .with_label_values(&[project])
+                .inc();
+            return Err(err);
+        }
 
         let url = format![
             "https://api.github.com/repos/{}/{}/actions/runs?branch={}&event=push&status=success&per_page=1&exclude_pull_requests=true",
@@ -116,18 +132,43 @@ impl<'a> Client<'a> {
             // https://stackoverflow.com/questions/60885496/github-304-responses-seem-to-count-against-rate-limit
             request = request.set("authorization", "none");
         }
-        let response = match request.call() {
+        let timer = metrics.github_request_duration.start_timer();
+        let response = request.call();
+        timer.observe_duration();
+        let response = match response {
             Ok(response) => response,
-            Err(err) => return Err(format!("failed to make GitHub API request: {err}")),
+            Err(err) => {
+                metrics
+                    .github_requests
+                    .with_label_values(&[project, "error"])
+                    .inc();
+                return Err(format!("failed to make GitHub API request: {err}"));
+            }
         };
-        self.rate_limiter
-            .lock()
-            .unwrap()
-            .update(self.db, auth_token, &response);
+        let result = if response.status() == 304 {
+            "not_modified"
+        } else {
+            "ok"
+        };
+        metrics
+            .github_requests
+            .with_label_values(&[project, result])
+            .inc();
+        // Conditional requests are sent with a dummy authorization header (see above), and
+        // GitHub accounts for these in a separate bucket. The rate limit headers on those
+        // responses thus don't describe the quota of the auth token, so we ignore them.
+        if old_etag.is_none() {
+            if let Some(info) = RateLimitInfo::build(&response) {
+                self.rate_limiter
+                    .lock()
+                    .unwrap()
+                    .update(self.db, auth_token, info);
+            }
+        }
 
         if response.status() == 304 {
             if let Some((_, workflow_run)) = self.cache.lock().unwrap().get(&url) {
-                return Ok(Some(workflow_run.clone()));
+                return Ok(workflow_run.clone());
             }
         }
 
@@ -145,24 +186,15 @@ impl<'a> Client<'a> {
                 ))
             }
         };
-        let workflow_run = match build.workflow_runs.pop() {
-            Some(workflow_run) => workflow_run,
-            // GitHub only retains workflows for 1 year, so it's expected that projects with
-            // no recent commits have no workflows.
-            None => {
-                if let Some(new_etag) = new_etag {
-                    let mut cache = self.cache.lock().unwrap();
-                    if let Some((etag, _)) = cache.get_mut(&url) {
-                        *etag = new_etag;
-                    }
-                }
-                return Ok(None);
-            }
-        };
+        // GitHub only retains workflows for 1 year, so it's expected that projects with
+        // no recent commits have no workflows.
+        let workflow_run = build.workflow_runs.pop();
 
         // Update the cache before exiting.
         let mut cache = self.cache.lock().unwrap();
-        if let Some((old_etag, cached_workflow_run)) = cache.get(&url) {
+        if let (Some(workflow_run), Some((old_etag, Some(cached_workflow_run)))) =
+            (&workflow_run, cache.get(&url))
+        {
             if workflow_run.created_at < cached_workflow_run.created_at {
                 return Err(format!["GitHub returned a stale workflow run! old_etag={old_etag}, new_etag={new_etag:?},\ncached_workflow={cached_workflow_run:#?}\nbody=<begin>\n{body}\n<end>"]);
             }
@@ -172,11 +204,60 @@ impl<'a> Client<'a> {
         }
         use std::ops::Deref;
         database::set_typed(self.db, "github_client/cache".to_string(), cache.deref()).unwrap();
-        Ok(Some(workflow_run))
+        Ok(workflow_run)
     }
 
-    pub fn rate_limit_info(&self) -> RateLimiter {
-        self.rate_limiter.lock().unwrap().clone()
+    /// Refresh the rate limit information for the provided auth token.
+    ///
+    /// Most requests are conditional and don't report the auth token's quota, so this
+    ///     is needed to keep the rate limit information current.
+    /// Calls to this endpoint don't count against the GitHub rate limit.
+    pub fn refresh_rate_limit(&self, auth_token: &str) -> Result<(), String> {
+        let mut request = self
+            .agent
+            .get("https://api.github.com/rate_limit")
+            .set("Accept", "application/vnd.github+json")
+            .set("X-GitHub-Api-Version", "2022-11-28");
+        if !auth_token.is_empty() {
+            request = request.set("Authorization", &format!["Bearer {auth_token}"]);
+        }
+        let response = match request.call() {
+            Ok(response) => response,
+            Err(err) => return Err(format!("failed to make GitHub rate limit request: {err}")),
+        };
+        let body: String = match response.into_string() {
+            Ok(body) => body,
+            Err(err) => return Err(format!("failed to read GitHub rate limit response: {err}")),
+        };
+        let body: RateLimitResponse = match serde_json::from_str(&body) {
+            Ok(body) => body,
+            Err(err) => {
+                return Err(format!(
+                    "failed to deserialize GitHub rate limit response: {err}"
+                ))
+            }
+        };
+        let core = body.resources.core;
+        let Some(reset) = chrono::DateTime::from_timestamp(core.reset, 0) else {
+            return Err(format!("invalid rate limit reset time {}", core.reset));
+        };
+        let info = RateLimitInfo {
+            limit: core.limit,
+            remaining: core.remaining,
+            used: core.used,
+            reset,
+            resource: "core".to_string(),
+        };
+        self.rate_limiter
+            .lock()
+            .unwrap()
+            .update(self.db, auth_token, info);
+        Ok(())
+    }
+
+    /// Returns the rate limit information for each resource.
+    pub fn rate_limit_info(&self) -> HashMap<String, RateLimitInfo> {
+        self.rate_limiter.lock().unwrap().resource_to_info.clone()
     }
 }
 
@@ -196,8 +277,29 @@ pub struct WorkflowRun {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
-pub struct RateLimiter {
+#[derive(serde::Deserialize)]
+struct RateLimitResponse {
+    resources: RateLimitResources,
+}
+
+#[derive(serde::Deserialize)]
+struct RateLimitResources {
+    core: RateLimitResource,
+}
+
+#[derive(serde::Deserialize)]
+struct RateLimitResource {
+    limit: u64,
+    remaining: u64,
+    used: u64,
+    reset: i64,
+}
+
+/// Rate limiter state; this is persisted in the database.
+///
+/// This contains auth tokens and so must not be shown on the status page.
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+struct RateLimiter {
     auth_token_to_resource: HashMap<String, String>,
     resource_to_info: HashMap<String, RateLimitInfo>,
 }
@@ -227,15 +329,31 @@ impl RateLimiter {
         }
         Err(format!("reached GitHub API rate limit for this auth token; resource={resource}, limit={}, reset_time={}", info.limit, info.reset))
     }
-    fn update(&mut self, db: &dyn database::DB, auth_token: &str, response: &ureq::Response) {
-        let Some(rate_limit_info) = RateLimitInfo::build(response) else {
-            return;
-        };
+    fn update(&mut self, db: &dyn database::DB, auth_token: &str, rate_limit_info: RateLimitInfo) {
         self.auth_token_to_resource
             .insert(auth_token.to_string(), rate_limit_info.resource.clone());
         self.resource_to_info
             .insert(rate_limit_info.resource.clone(), rate_limit_info);
+        self.update_metrics();
         database::set_typed(db, "github_client/rate_limiter".to_string(), self).unwrap();
+    }
+    fn update_metrics(&self) {
+        let metrics = metrics::get();
+        for (resource, info) in &self.resource_to_info {
+            let labels = [resource.as_str()];
+            metrics
+                .github_rate_limit_remaining
+                .with_label_values(&labels)
+                .set(info.remaining as i64);
+            metrics
+                .github_rate_limit_limit
+                .with_label_values(&labels)
+                .set(info.limit as i64);
+            metrics
+                .github_rate_limit_reset
+                .with_label_values(&labels)
+                .set(info.reset.timestamp());
+        }
     }
 }
 

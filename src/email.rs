@@ -1,8 +1,11 @@
 use lettre::transport::smtp;
 
+use crate::config::Secret;
+use crate::metrics;
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Config {
-    smtp_url: String,
+    smtp_url: Secret,
     from: lettre::message::Mailbox,
     to: lettre::message::Mailbox,
 }
@@ -37,7 +40,7 @@ impl Notifier for Client {
         use lettre::Message;
         use lettre::Transport;
         eprintln!("[email] sending email with title {title}");
-        let transport = smtp::SmtpTransport::from_url(&self.config.smtp_url)
+        let transport = smtp::SmtpTransport::from_url(self.config.smtp_url.expose())
             .unwrap()
             .build();
         match transport.test_connection() {
@@ -56,9 +59,19 @@ impl Notifier for Client {
             .header(ContentType::TEXT_PLAIN)
             .body(body.to_string())
             .unwrap();
-        match transport.send(&email) {
-            Ok(_) => eprintln!("Email sent successfully!"),
-            Err(err) => eprintln!("Failed to send email: {err:?}"),
-        }
+        let result = match transport.send(&email) {
+            Ok(_) => {
+                eprintln!("Email sent successfully!");
+                "success"
+            }
+            Err(err) => {
+                eprintln!("Failed to send email: {err:?}");
+                "failure"
+            }
+        };
+        metrics::get()
+            .notifications
+            .with_label_values(&[result])
+            .inc();
     }
 }

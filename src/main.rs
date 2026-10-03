@@ -3,6 +3,7 @@ mod database;
 mod email;
 mod github;
 mod http;
+mod metrics;
 mod project;
 use std::sync::mpsc;
 

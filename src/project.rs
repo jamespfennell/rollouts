@@ -2,6 +2,7 @@ use crate::config;
 use crate::database;
 use crate::email;
 use crate::github;
+use crate::metrics;
 use std::process::Command;
 use std::sync;
 use std::sync::mpsc;
@@ -37,12 +38,26 @@ impl<'a> Manager<'a> {
                     None => Project::new(project_config),
                     Some(mut project) => {
                         project.config = project_config;
+                        if project.redact_run_result_auth_tokens() {
+                            database::set_typed(
+                                db,
+                                format!["project_manager/projects/{}", project.config.name],
+                                &project,
+                            )
+                            .unwrap();
+                        }
                         project
                     }
                 }
             })
             .collect();
         projects.sort_by_key(|p| p.config.name.clone());
+        metrics::get()
+            .projects_configured
+            .set(projects.len() as i64);
+        for project in &projects {
+            project.init_metrics();
+        }
         let projects = sync::Mutex::new(projects);
         Self {
             agent_url,
@@ -84,6 +99,19 @@ impl<'a> Manager<'a> {
             let start = chrono::Utc::now();
 
             let mut projects = (*self.projects.lock().unwrap()).clone();
+
+            let mut auth_tokens: Vec<&str> = projects
+                .iter()
+                .filter(|p| !p.config.paused)
+                .map(|p| p.config.auth_token.expose())
+                .collect();
+            auth_tokens.sort();
+            auth_tokens.dedup();
+            for auth_token in auth_tokens {
+                if let Err(err) = self.github_client.refresh_rate_limit(auth_token) {
+                    eprintln!("[project_manager] failed to refresh GitHub rate limit: {err}");
+                }
+            }
             for project in &mut projects {
                 if rx.try_recv().is_ok() {
                     eprintln!(
@@ -92,12 +120,25 @@ impl<'a> Manager<'a> {
                     );
                     return;
                 }
-                if let Err(err) = project.run(self.github_client, self.notifier, &self.agent_url) {
-                    eprintln!(
-                        "Failed to run one iteration for project {}: {err}",
-                        project.config.name
-                    );
+                let metrics = metrics::get();
+                let result = project.run(self.github_client, self.notifier, &self.agent_url);
+                let name = [project.config.name.as_str()];
+                match result {
+                    Ok(()) => {
+                        metrics::set_timestamp(
+                            &metrics.project_last_poll_success.with_label_values(&name),
+                            chrono::Utc::now(),
+                        );
+                    }
+                    Err(err) => {
+                        metrics.project_poll_errors.with_label_values(&name).inc();
+                        eprintln!(
+                            "Failed to run one iteration for project {}: {err}",
+                            project.config.name
+                        );
+                    }
                 }
+                project.update_state_metrics();
                 database::set_typed(
                     self.db,
                     format!("project_manager/projects/{}", project.config.name),
@@ -107,6 +148,9 @@ impl<'a> Manager<'a> {
             }
             *self.projects.lock().unwrap() = projects;
             let loop_duration = chrono::Utc::now() - start;
+            metrics::get()
+                .poll_loop_duration
+                .observe(seconds(loop_duration));
             match self.poll_interval.checked_sub(&loop_duration) {
                 Some(remaining) => {
                     if rx
@@ -165,9 +209,10 @@ impl Project {
         }
         let old_workflow_run = &self.last_workflow_run;
         let new_workflow_run_or = github_client.get_latest_successful_workflow_run(
+            &self.config.name,
             &self.config.repo,
             &self.config.branch,
-            &self.config.auth_token,
+            self.config.auth_token.expose(),
         )?;
         let Some(new_workflow_run) = new_workflow_run_or else {
             return Ok(());
@@ -258,6 +303,10 @@ impl Project {
             let success = step_result.success;
             result.steps.push(step_result);
             if !success {
+                metrics::get()
+                    .deployment_step_failures
+                    .with_label_values(&[&self.config.name, &step.name])
+                    .inc();
                 result.success = false;
                 eprintln!("failed to run command: {:?}", result);
                 break;
@@ -271,12 +320,105 @@ impl Project {
         }
 
         result.finished = chrono::offset::Utc::now();
+        self.record_deployment_metrics(&result);
         self.run_results.insert(0, result);
         while self.run_results.len() >= self.config.retention {
             self.run_results.pop();
         }
         Ok(())
     }
+}
+
+impl Project {
+    /// Redacts auth tokens in the configs stored in run results.
+    ///
+    /// Run results recorded before auth tokens were redacted on serialization contain the
+    ///     plaintext token.
+    /// Returns true if any run result was changed.
+    fn redact_run_result_auth_tokens(&mut self) -> bool {
+        let mut changed = false;
+        for result in &mut self.run_results {
+            let Some(token) = result.config.get_mut("auth_token") else {
+                continue;
+            };
+            let redacted = match token.as_str() {
+                Some("") | Some(config::Secret::REDACTED) => continue,
+                _ => serde_json::Value::from(config::Secret::REDACTED),
+            };
+            *token = redacted;
+            changed = true;
+        }
+        changed
+    }
+
+    /// Initializes this project's metrics from state loaded from the database.
+    fn init_metrics(&self) {
+        let metrics = metrics::get();
+        let name = self.config.name.as_str();
+        metrics.project_poll_errors.with_label_values(&[name]);
+        metrics.github_rate_limited.with_label_values(&[name]);
+        for result in ["success", "failure"] {
+            metrics.deployments.with_label_values(&[name, result]);
+        }
+        // Results are stored newest first, so the first match is the most recent.
+        for success in [true, false] {
+            if let Some(result) = self.run_results.iter().find(|r| r.success == success) {
+                metrics::set_timestamp(
+                    &metrics
+                        .project_last_deployment
+                        .with_label_values(&[name, result_label(success)]),
+                    result.finished,
+                );
+            }
+        }
+        self.update_state_metrics();
+    }
+
+    fn update_state_metrics(&self) {
+        let metrics = metrics::get();
+        let name = [self.config.name.as_str()];
+        metrics
+            .project_pending
+            .with_label_values(&name)
+            .set(self.pending.is_some() as i64);
+        metrics
+            .project_paused
+            .with_label_values(&name)
+            .set(self.config.paused as i64);
+    }
+
+    fn record_deployment_metrics(&self, result: &RunResult) {
+        let metrics = metrics::get();
+        let name = self.config.name.as_str();
+        let label = result_label(result.success);
+        metrics.deployments.with_label_values(&[name, label]).inc();
+        metrics
+            .deployment_duration
+            .with_label_values(&[name])
+            .observe(seconds(result.finished - result.started));
+        metrics
+            .deployment_lag
+            .with_label_values(&[name])
+            .observe(seconds(result.finished - result.workflow_run.created_at));
+        metrics::set_timestamp(
+            &metrics
+                .project_last_deployment
+                .with_label_values(&[name, label]),
+            result.finished,
+        );
+    }
+}
+
+fn result_label(success: bool) -> &'static str {
+    if success {
+        "success"
+    } else {
+        "failure"
+    }
+}
+
+fn seconds(d: chrono::Duration) -> f64 {
+    d.num_milliseconds() as f64 / 1000.0
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

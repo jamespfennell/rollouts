@@ -59,7 +59,7 @@ pub struct ProjectConfig {
     /// If provided, the auth token must have GitHub actions read permission
     ///     on the repository.
     #[serde(default)]
-    pub auth_token: String,
+    pub auth_token: Secret,
 
     /// Working directory in which to run the redeployment steps.
     ///
@@ -115,6 +115,63 @@ pub struct ComposeConfig {
     /// Services to redeploy. If empty, all services are redeployed.
     #[serde(default)]
     pub services: Vec<String>,
+}
+
+/// A secret value such as an auth token or a URL containing a password.
+///
+/// The value is redacted when serialized or debug-printed,
+///     so configs containing secrets can be safely shown on the status page or logged.
+/// Use [`Secret::expose`] to access the value.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Secret(String);
+
+impl Secret {
+    /// Value that non-empty secrets are serialized as.
+    pub const REDACTED: &'static str = "<redacted>";
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for Secret {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            write!(f, "Secret(\"\")")
+        } else {
+            write!(f, "Secret({})", Self::REDACTED)
+        }
+    }
+}
+
+impl serde::Serialize for Secret {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Empty secrets are serialized as is so that it is possible to see if a secret is set.
+        if self.0.is_empty() {
+            serializer.serialize_str("")
+        } else {
+            serializer.serialize_str(Self::REDACTED)
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Secret {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw: String = serde::Deserialize::deserialize(deserializer)?;
+        Ok(Self(raw))
+    }
 }
 
 fn ten() -> usize {

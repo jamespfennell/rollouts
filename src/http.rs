@@ -41,6 +41,10 @@ impl<'a> Service<'a> {
                 let (data, content_type) = match path {
                     "/" | "/index.html" => (self.index_html(), "text/html; charset=UTF-8"),
                     "/status.json" => (self.status_json(), "application/json; charset=UTF-8"),
+                    "/metrics" => (
+                        crate::metrics::get().render(),
+                        "text/plain; version=0.0.4; charset=UTF-8",
+                    ),
                     _ => {
                         let response = tiny_http::Response::empty(tiny_http::StatusCode(404));
                         request.respond(response).unwrap();
@@ -61,7 +65,9 @@ impl<'a> Service<'a> {
         let data = Data {
             hostname: self.hostname.clone(),
             projects: self.project_manager.projects(),
-            rate_limit_info: self.github_client.rate_limit_info(),
+            rate_limit_info: RateLimitInfo {
+                resource_to_info: self.github_client.rate_limit_info(),
+            },
         };
         serde_json::to_string_pretty(&data).unwrap()
     }
@@ -114,5 +120,84 @@ static STATUS_DOT_HTML: &str = include_str!("status.html");
 struct Data {
     hostname: String,
     projects: Vec<project::Project>,
-    rate_limit_info: github::RateLimiter,
+    rate_limit_info: RateLimitInfo,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct RateLimitInfo {
+    resource_to_info: std::collections::HashMap<String, github::RateLimitInfo>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{config, database, email};
+
+    const TOKEN: &str = "ghp_test123";
+
+    #[test]
+    fn status_json_does_not_contain_auth_tokens() {
+        let db = database::new_in_memory_db();
+        // State as it would have been written before auth tokens were redacted.
+        database::set_typed(
+            &db,
+            "github_client/rate_limiter".to_string(),
+            &serde_json::json!({
+                "auth_token_to_resource": {TOKEN: "core"},
+                "resource_to_info": {"core": {
+                    "limit": 5000, "remaining": 4999, "used": 1,
+                    "reset": "2026-01-01T00:00:00Z", "resource": "core",
+                }},
+            }),
+        )
+        .unwrap();
+        database::set_typed(
+            &db,
+            "project_manager/projects/project".to_string(),
+            &serde_json::json!({
+                "config": {"name": "project", "repo": "github.com/user/repo", "branch": "main", "auth_token": TOKEN},
+                "last_workflow_run": null,
+                "pending": null,
+                "run_results": [{
+                    "config": {"name": "project", "auth_token": TOKEN},
+                    "success": true,
+                    "workflow_run": {
+                        "id": 1, "display_title": "", "run_number": 1, "head_sha": "", "html_url": "",
+                        "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+                    },
+                    "steps": [],
+                }],
+            }),
+        )
+        .unwrap();
+        let project_config: config::ProjectConfig = serde_yaml::from_str(&format!(
+            "{{name: project, repo: github.com/user/repo, branch: main, auth_token: {TOKEN}}}"
+        ))
+        .unwrap();
+        assert_eq!(project_config.auth_token.expose(), TOKEN);
+
+        let github_client = github::Client::new(&db);
+        let notifier = email::NoOpNotifier {};
+        let project_manager = project::Manager::new(
+            &db,
+            &notifier,
+            &github_client,
+            "example.com".to_string(),
+            vec![project_config],
+            chrono::Duration::seconds(60),
+        );
+        let service = Service::new("example.com".to_string(), &github_client, &project_manager);
+
+        let status_json = service.status_json();
+        assert!(!status_json.contains(TOKEN), "{status_json}");
+        assert!(status_json.contains(config::Secret::REDACTED));
+        assert!(status_json.contains("4999"));
+        let debug = format!("{:?}", project_manager.projects());
+        assert!(!debug.contains(TOKEN), "{debug}");
+        let stored: serde_json::Value =
+            database::get_typed(&db, "project_manager/projects/project")
+                .unwrap()
+                .unwrap();
+        assert!(!stored.to_string().contains(TOKEN), "{stored}");
+    }
 }
